@@ -38,14 +38,7 @@ Part of the [SwitchGamesRecomp](https://github.com/BelmanteGu/SwitchGamesRecomp)
 | macOS (Apple Silicon) | works, the reference platform | Vulkan on Metal through MoltenVK |
 | Windows (x86-64) | works, tested on NVIDIA (RTX 3050) and Intel GPUs | native Vulkan 1.3 |
 | Android (arm64) | works, tested on a Galaxy S23 | native Vulkan 1.3 |
-| Linux | **not ported yet, but close** | native Vulkan 1.3 |
-
-Linux is not a rewrite. The recompiled game code is portable C++ and the NVN layer talks only generic Vulkan, with
-no Metal code. What is missing is the same small platform layer macOS, Windows and Android already have: a
-`platform_linux.cpp` (window, input, audio) and a `memguard_linux.cpp` next to the existing `platform_mac.cpp` /
-`platform_win.cpp` / `memguard_*.cpp` in `runtime/src/`, plus a Linux branch in `CMakeLists.txt` (today its
-non-Apple, non-Android branch is the Windows one). Nobody has built or run it on Linux yet. Pull requests are
-welcome.
+| Linux (x86-64), Steam Deck | works, tested on AMD (Radeon 880M and the Steam Deck, RADV) | native Vulkan 1.3 |
 
 ## State
 
@@ -80,7 +73,8 @@ The details are in the GitHub milestones.
 - **Windowed confirmation of the W7 glitch fixes (#43-#45, #47):** horizon band, silhouettes, present mode.
 - **Character-select blur:** needs a reference from a real console.
 - **Android rendering bugs and performance:** hand-off notes in [docs/nvn/android-perf/](docs/nvn/android-perf/).
-- **Linux:** see [Platforms](#platforms).
+- **Linux:** first visits to an area hitch while the driver compiles pipelines (the on-disk pipeline cache covers
+  the next visit). Tested only on AMD.
 
 ### Windows
 
@@ -120,13 +114,37 @@ Touch controls:
 
 A Bluetooth or USB controller works too, and the touch controls hide while it is in use.
 
+### Linux and Steam Deck
+
+The platform layer is `runtime/src/platform_linux.cpp` (SDL3 window, input and audio; X11 or Wayland) and
+`memguard_linux.cpp`. Tested on a Radeon 880M laptop and the Steam Deck, both with Mesa's RADV driver: 60 fps.
+The steps are those of the macOS section below, with these differences:
+
+- **Requirements:** clang, CMake, Ninja, SDL3, the Vulkan headers and loader, a Vulkan 1.3 driver, Python 3 venv in
+  `private/venv`. On Arch: `pacman -S clang cmake ninja sdl3 vulkan-headers vulkan-icd-loader`. Configure with
+  `CC=clang CXX=clang++`.
+- **Dump:** `hactool` extracts the Program NCA as well as `nstool` does (`--exefsdir`, `--romfsdir`).
+- **Button font:** the default `--base` is a macOS font. Pass any TrueType font with `glyf` outlines, e.g.
+  `--base /usr/share/fonts/liberation/LiberationSans-Regular.ttf`.
+- **Steam Deck:** SteamOS has no compilers, so build elsewhere for an older glibc than the Deck's (an Ubuntu
+  22.04 container works), link libstdc++ statically (`-DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"`)
+  and ship `libSDL3.so.0` next to the binary (`-DCMAKE_BUILD_RPATH='$ORIGIN/lib'`, the library in `lib/`). Copy
+  the binary with `analysis/`, `extract/`, `spirv/` and `fonts/`, and start it from a script that sets
+  `NX_DATA_ROOT`, `NX_HANDHELD=1` (720p, for the Deck's screen) and `NX_PIPELINED=2`. On the Deck's CPU, recording a
+  frame takes ~9 ms; with synchronous submits the GPU waits for it and play drops to 50-58 fps, pipelined it holds
+  60. Add the script to Steam as a non-Steam game.
+
 ### Build and run (macOS, Apple Silicon)
 
 Requirements: Xcode command line tools, CMake, Ninja, Homebrew `sdl3` + `vulkan-headers` + `vulkan-loader` + `molten-vk`, Python 3 venv
 in `private/venv`.
 
 1. **Dump.** Dump your own cartridge (nxdumptool) and keys (Lockpick_RCM). Extract to `private/wonder/exefs` and
-   `private/wonder/romfs` with `nstool`.
+   `private/wonder/extract/romfs` with `nstool`. The runtime reads the module images too:
+   ```sh
+   private/venv/bin/python tools/nso2bin.py private/wonder/exefs/main private/wonder/analysis/main.bin
+   private/venv/bin/python tools/nso2bin.py private/wonder/exefs/sdk  private/wonder/analysis/sdk.bin
+   ```
 2. **Recompile the CPU code.** This takes about 6 minutes and 2.4 GB of memory for `main`:
    ```sh
    private/venv/bin/python -m recomp private/wonder/exefs/main private/wonder/gen/main --name main --base 0x4000000000
@@ -148,7 +166,9 @@ in `private/venv`.
    ```sh
    NX_LOG=private/wonder/nx.log private/wonder/build/wonder
    ```
-   It plays with a gamepad (SDL) or the keyboard.
+   It plays with a gamepad (SDL) or the keyboard. The data root defaults to `private/wonder` relative to the working
+   directory, so run it from the repository root, or set `NX_DATA_ROOT` to the folder holding `analysis/`,
+   `extract/`, `spirv/` and `fonts/`.
 
 Useful switches:
 
@@ -187,7 +207,7 @@ Ground rules for this track:
 | Path | What |
 |---|---|
 | `recomp/` | the AArch64 → C++ recompiler (Python) |
-| `runtime/` | shared runtime: kernel, IPC, `nn::*` HLE, memory, platform layers (Windows, macOS, Android) |
+| `runtime/` | shared runtime: kernel, IPC, `nn::*` HLE, memory, platform layers (Windows, macOS, Linux, Android) |
 | `runtime/src/nvn/` | NVN over Vulkan (Wonder) |
 | `games/<game>/` | per-game glue (entry, patches, mods) |
 | `tools/` | extraction, shader and font tools, packaging |

@@ -223,6 +223,20 @@ and compile with Metal. The previous files are kept next to the new ones as `pri
 Finding them again: a label that no branch, merge or phi instruction names (other than a function's first) is dead
 code, and Ryujinx's back end emits none otherwise.
 
+### Vertex outputs written only in part (fixed by a local patch)
+
+A vertex shader may write only some components of an output vector (Wonder's floor writes location 2's `.y`, and
+its fragment shader reads `.x`). In Vulkan the rest is undefined: 0 on NVIDIA and MoltenVK, NaN on AMD's RADV, which
+drew the floor and, through the bloom, everything around it black on the Radeon laptop and the Steam Deck
+([DEBUG-2.md](DEBUG-2.md) #93). Ryujinx translates a vertex shader linked to the stage after it and initializes
+every component that stage reads (`NextInputAttributesComponents`). The harness translates each stage on its own,
+so that set is empty and nothing was initialized.
+
+**Fix** (`translator/spirv-outputs.patch`, `Translator.cs`): a stage with no linked next stage initializes every
+output location it writes (`UsedOutputAttributes`) to (0, 0, 0, 1) before its code, the value a linked translation
+gives the components the shader leaves alone. Wonder: 4,755 vertex shaders change, all pass `spirv-val`; the rest
+stay byte for byte the same. The regenerated `spirv/` is needed on every platform.
+
 ### Local patches
 
 `translator/Ryujinx.Graphics.Shader.csproj` compiles the translator's sources straight from
