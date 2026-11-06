@@ -31,6 +31,11 @@ endif()
 if(WIN32)
     add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
+# The guest's 128-bit exclusive pairs (cpu.h ldxp/stxp) are 16-byte atomics: cmpxchg16b inline. Windows targets
+# assume it; the Linux x86-64 baseline does not, and clang then calls libatomic's __atomic_*_16 instead.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    add_compile_options(-mcx16)
+endif()
 
 # Unit tests of runtime pieces that build without the game (docs/nvn/WINDOWS-PLAN.md, "Test plan"): ctest.
 option(NX_TESTS "Build the standalone unit tests" OFF)
@@ -76,7 +81,7 @@ foreach(mod main sdk)
         # armv8.2-a+crypto: cpu.h's AES/SHA paths need __ARM_FEATURE_AES/SHA2 (the NDK default armv8-a has neither).
         target_compile_options(game_${mod} PRIVATE -O2 -fPIC -fvisibility=hidden -fno-semantic-interposition
                                -march=armv8.2-a+crypto)
-    elseif(APPLE)
+    elseif(APPLE OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
         target_compile_options(game_${mod} PRIVATE -O2 -fvisibility=hidden)
     endif()
 endforeach()
@@ -193,6 +198,18 @@ elseif(APPLE)
     target_compile_options(${NX_GAME} PRIVATE -fvisibility=hidden)
     # The executable loads near 0x1_0000_0000, below the guest ranges (0x40_0000_0000 and up). The game runs on its
     # own thread with a 64 MiB stack (platform_mac.cpp), so the main thread's stack size does not matter.
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Linux: SDL3 (window on Wayland or X11, input, audio) and the system Vulkan headers; the loader comes with the
+    # GPU driver (Arch: sdl3 vulkan-headers vulkan-icd-loader).
+    find_package(SDL3 REQUIRED CONFIG)
+    find_path(NX_VULKAN_INCLUDE vulkan/vulkan.h)
+    add_executable(${NX_GAME} ${NX_RUNTIME_SOURCES} runtime/src/platform_linux.cpp runtime/src/memguard_linux.cpp)
+    target_include_directories(${NX_GAME} PRIVATE runtime/include runtime/src "${NX_GAME_DIR}" "${NX_VULKAN_INCLUDE}")
+    target_link_libraries(${NX_GAME} PRIVATE game_main game_sdk SDL3::SDL3 ${CMAKE_DL_LIBS})
+    target_compile_options(${NX_GAME} PRIVATE -fvisibility=hidden)
+    # A position independent executable loads near 0x55_5555_0000_0000 (x86-64) or 0xAAAA_AAAA_0000 (aarch64), far
+    # above the guest ranges (0x40_0000_0000..0x70_0000_0000). The game runs on its own thread with a 64 MiB stack
+    # (platform_linux.cpp), so the main thread's stack size does not matter.
 else()
     add_executable(${NX_GAME} ${NX_RUNTIME_SOURCES} runtime/src/platform_win.cpp runtime/src/memguard_win.cpp)
     target_include_directories(${NX_GAME} PRIVATE runtime/include runtime/src "${NX_GAME_DIR}" "${NX_VULKAN_SDK}/Include")

@@ -1,0 +1,31 @@
+Ryujinx shader translator: a stage translated on its own (no linked next stage) initializes every output location
+it writes to (0, 0, 0, 1), as Ryujinx does when it links stages. A vector output written only in part left the other
+components undefined: 0 on NVIDIA, NaN on AMD (RADV), Wonder's floor and lighting drawn black (docs/nvn/DEBUG-2.md).
+Applied at build time by translator/Ryujinx.Graphics.Shader.csproj to a copy in private/build; the checkout in
+private/third_party stays untouched. The Ryujinx code in the context lines is MIT.
+--- a/Translation/Translator.cs	2026-11-06 08:49:10.120968081 +0000
++++ b/Translation/Translator.cs	2026-11-06 08:49:10.132016442 +0000
+@@ -209,6 +209,23 @@
+                 InitializeVertexOutputs(context);
+             }
+ 
++            // Translated on its own (no linked next stage, so NextInputAttributesComponents below is empty): every
++            // output location the shader writes starts as (0, 0, 0, 1), as when linked. A vector written only in part
++            // (Wonder's floor: location 2, .y only) left the rest undefined; the next stage read 0 on NVIDIA and NaN
++            // on AMD (RADV), drawn black and spread by the bloom (docs/nvn/DEBUG-2.md).
++            if (context.TranslatorContext.AttributeUsage.NextInputAttributesComponents == UInt128.Zero)
++            {
++                int written = context.TranslatorContext.AttributeUsage.UsedOutputAttributes;
++
++                for (int location = 0; location < 32; location++)
++                {
++                    if ((written & (1 << location)) != 0)
++                    {
++                        InitializeOutput(context, location, perPatch: false);
++                    }
++                }
++            }
++
+             UInt128 usedAttributes = context.TranslatorContext.AttributeUsage.NextInputAttributesComponents;
+             while (usedAttributes != UInt128.Zero)
+             {

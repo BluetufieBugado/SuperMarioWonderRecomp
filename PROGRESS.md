@@ -23,6 +23,54 @@ NVN implemented over Vulkan (MoltenVK).
 
 ## Log
 
+### 2026-11-06: Linux and the Steam Deck; black objects on AMD fixed
+
+- **Linux platform layer** (`runtime/src/platform_linux.cpp`, from `platform_mac.cpp`):
+  - Guest memory: the fixed-address reserve uses `MAP_FIXED_NOREPLACE`. Decommit zeroes partial pages, then
+    `madvise(MADV_DONTNEED)` and `PROT_NONE` on whole ones.
+  - Window, input and audio through SDL3. The Vulkan surface comes from SDL, so X11 and Wayland both work.
+    `NX_FULLSCREEN`, and F11 or Alt+Enter, toggle fullscreen.
+  - Threads: `gettid` by syscall, names cut to Linux's 15 characters. The crash handler reads the PC from `REG_RIP`
+    (x86-64) or `pc` (aarch64).
+  - `runtime/src/memguard_linux.cpp`: resident memory from `/proc/self/statm` every 250 ms, against
+    `NX_MEM_LIMIT_GB` (default 8).
+- **Build:** a Linux branch in `CMakeLists.txt` (SDL3, Vulkan headers, `-fvisibility=hidden`).
+  - `-mcx16` on x86-64: the recompiled LDXP/STXP are 16-byte atomics. Without it clang calls `__atomic_*_16` in
+    libatomic and the link fails.
+  - `hle_fs.cpp` was missing `#include <vector>` (the other platforms' standard libraries include it indirectly; libstdc++ does not).
+  - `hle_pl.cpp`: Linux fallbacks for the shared fonts (Liberation, Noto, DejaVu).
+- **Steam Deck:**
+  - The binary is built in an Ubuntu 22.04 container (glibc 2.35, older than SteamOS's), with libstdc++ linked
+    statically and SDL3 shipped beside it (`rpath $ORIGIN/lib`), so it needs nothing installed on the Deck.
+  - Radeon 880M laptop (RADV): 60 fps. Deck (RADV, Van Gogh), handheld 720p: 50-58 fps with synchronous submits.
+    The GPU was idle about two-thirds of the time while the Deck's CPU recorded the frame (~9 ms).
+    `NX_PIPELINED=2` overlaps the two: replay ~3 ms, steady 60 fps. First visits to an area still hitch while the
+    driver compiles pipelines; the on-disk pipeline cache takes them away the next time.
+  - **A deadlock on the pause screen, in the shared runtime.** `svc_wait_process_wide_key` (`kernel.cpp`) released
+    the mutex before setting the condition variable's "has waiters" word. The SDK's `Signal` reads that word and
+    skips the syscall when it is 0, so a thread that took the mutex in that gap and signalled lost the wakeup.
+    A writer in `ReaderWriterLock::AcquireWriteLock` slept forever, and the main thread behind it. The word is now
+    set first, as in Horizon's `KConditionVariable::Wait`. The Deck's 4 cores made the gap likely enough to hit;
+    `NX_TRACE_ADDR` slowed the path and hid it. It had frozen 3 times out of 3; after the fix, minutes on the pause
+    screen and ~11 minutes of play without a hang (DEBUG-2 #94).
+- **Black objects on AMD** (RADV, laptop and Deck; NVIDIA and Apple were fine):
+  - Symptom: in courses, characters, ground and blocks drawn as black silhouettes inside a region that moved with
+    the camera; jumping above it showed them lit. Then, with the first fixes in, only the floor stayed black.
+  - Cause: vertex shaders that write only part of an output vector. The floor's writes location 2 `.y` only; its
+    fragment shader reads `.x`. The unwritten components are undefined: 0 on NVIDIA, NaN on RADV, and the bloom
+    chain spread the NaN.
+  - Ryujinx initialises those outputs when it links a shader's stages. Our harness translates each stage on its
+    own, so that never ran.
+  - Fix: `tools/maxwell/spirv_harness/translator/spirv-outputs.patch` initialises every output location a stage
+    writes to (0, 0, 0, 1) when there is no linked next stage. Regenerating the SPIR-V changed 4,755 vertex
+    shaders, all valid. **Every platform needs the regenerated `spirv/`.** On NVIDIA and Apple the components
+    already read 0, so nothing should change there, but it is tested only on RADV.
+  - How it was found: a RenderDoc capture analysed with `qrenderdoc --python` (headless, `QT_QPA_PLATFORM=offscreen`),
+    pixel history on a black pixel, then the SPIR-V instrumented to record the first NaN each shader stored.
+  - Ruled out on the way: `RADV_DEBUG=nohiz`, `nodcc`, `nofastclears` and `llvm`; `NX_REINIT_WAITS_REPLAY`;
+    `NX_PIPELINED`; flushing denormals to zero everywhere; clamping NaN in shaders; NaN in textures or uniforms.
+- Details: [docs/nvn/DEBUG-2.md](docs/nvn/DEBUG-2.md), entries 93-94.
+
 ### 2026-09-30 (night): Wonder boots on Android; W8 fixes; Windows plan
 
 ![World map with the player](docs/media/wonder/39-world-map-player.png)

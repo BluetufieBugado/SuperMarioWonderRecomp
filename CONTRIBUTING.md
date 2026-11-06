@@ -24,7 +24,7 @@ merged. Screenshots and short clips in bug reports are fine.
 
 Please include:
 
-- platform (macOS / Windows / Android), device, CPU and GPU, driver version
+- platform (macOS / Windows / Linux / Android), device, CPU and GPU, driver version
 - what you did, what happened, what you expected
 - the log (`NX_LOG=<file>`), and a screenshot or short clip for visual bugs
 - the debug switches you had set (see [docs/nvn/SWITCHES.md](docs/nvn/SWITCHES.md))

@@ -481,3 +481,56 @@ GitHub (issues #43-#48): the glitches in the user's recording of course 1-1 (`do
       before. Diagnosis tool: `NX_FRAME_SIG` (per-frame draw signature, `nvn_draw_trace.cpp`) and
       `tools/find_haze_flicker.py`.
     - Check: the owner's play after the fix: no haze flicker. Formal recordings still to do.
+
+## Linux and the Steam Deck (2026-11-06; branch `feat/linux-wonder`)
+
+93. **Characters, ground and blocks drawn black on AMD (RADV): vertex outputs written only in part.**
+    - Symptom (Radeon 880M laptop and the Steam Deck, RADV; NVIDIA and Apple fine): in courses, the gameplay layer
+      (characters, ground, blocks) drawn as solid black silhouettes inside a region that moved with the camera,
+      lit outside it and when jumping above it. Menus, the title and character select were correct. Once the
+      bloom's input was cleaned up, only the floor stayed black, which pointed at one draw.
+    - Cause: the floor's vertex shader writes output location 2's `.y` only, and its fragment shader reads `.x`.
+      A component the vertex stage does not write is undefined in Vulkan: NVIDIA and MoltenVK hand over 0, RADV
+      hands over NaN. The NaN went into the lighting, and the bloom chain's blurs spread it over the region around
+      every pixel it reached: hence the camera-relative block.
+    - Ryujinx itself is not affected: it translates a vertex shader linked to the stage after it, and
+      `NextInputAttributesComponents` makes it initialize every component that stage reads. Our harness
+      (`tools/maxwell/spirv_harness`) translates each stage on its own, so that set is empty and nothing was
+      initialized.
+    - Fix: `tools/maxwell/spirv_harness/translator/spirv-outputs.patch` (Translation/Translator.cs). A stage
+      translated without a linked next stage initializes every output location it writes to (0, 0, 0, 1) before its
+      code runs, the value a linked translation gives the components the shader leaves alone. Wonder's regenerated
+      SPIR-V: 4,755 vertex shaders changed, all valid (`spirv-val`). Every platform needs the regenerated `spirv/`.
+      On NVIDIA and Apple the components already read 0, so nothing should change there; tested on RADV only.
+    - How it was found: a RenderDoc capture of a black frame on the laptop, analysed headless with
+      `qrenderdoc --python` (`QT_QPA_PLATFORM=offscreen`; answer its first-run prompts once in the UI, or the script
+      never runs). Pixel history on a black pixel led back through the bloom to NaN in the lighting. Stripping
+      `FragmentShaderPixelInterlockEXT` from the module made the fragment shader debuggable in RenderDoc, and a copy of
+      the SPIR-V instrumented to store where it first produced NaN pointed at the floor's interpolated input.
+    - Ruled out on the way: `RADV_DEBUG=nohiz`, `nodcc,nohiz,nofastclears` and `llvm`; `NX_REINIT_WAITS_REPLAY=1`;
+      `NX_PIPELINED=1`; denormals flushed to zero in every shader; NaN clamped in the shaders; NaN in the textures
+      and uniforms the draws read; subgroup size.
+    - Still open on RADV (validation layers, no visible effect found): depth-compare sampling of R32F/R16 colour
+      images (VUID-vkCmdDrawIndexed-None-06479; NVIDIA has `SAMPLED_IMAGE_DEPTH_COMPARISON` on those formats, RADV
+      does not), the same on RGBA8 in compute (particles), an R16_UINT image with a linear filter, and SRGB storage
+      views. A depth-format copy of the image for such bindings removed the draw error but changed nothing on
+      screen; it is left out until it is tested further.
+
+94. **The game froze on the pause screen on the Steam Deck: a condition variable's wakeup lost (`kernel.cpp`).**
+    - Symptom (Deck only, so far): the pause screen froze after a while, 3 times out of 3. Audio played on, and
+      the hang report showed every thread asleep: one thread (a job worker, or the main thread itself) in
+      `ReaderWriterLockImplByHorizon::AcquireWriteLock` waiting on the lock's condition variable, called from
+      `main+92d1ec` with the same condition variable each time, and the main thread waiting on that worker's jobs.
+      No other thread was anywhere it could hold the lock.
+    - `NX_TRACE_ADDR` on the main thread's event made it go away for a long run (it slows the wait and signal
+      paths), and it came back later in the same run: a race.
+    - Cause: `svc_wait_process_wide_key` released the mutex and then set the condition variable's "has waiters"
+      word. The SDK's `InternalConditionVariableImplByHorizon::Signal` (`sdk+13774c`) reads that word and returns
+      without calling `svcSignalProcessWideKey` when it is 0. A thread that took the released mutex in that gap,
+      released the lock and signalled found 0, and the waiter slept for good. Mutexes are taken without entering
+      the kernel, so the kernel lock did not close the gap.
+    - Fix: the word is set before the mutex is released, as Horizon's `KConditionVariable::Wait` does.
+    - Why the Deck: its 4 cores (8 threads) were all busy with the game's threads and the replay, so a thread
+      preempted inside the gap was far more likely than on 8-16 core PCs. The bug is in the shared runtime.
+    - Check: the owner's Deck after the fix, with the pause screen open for several minutes and about 11 minutes of
+      play in all: no hang.

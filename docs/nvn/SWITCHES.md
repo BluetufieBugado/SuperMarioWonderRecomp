@@ -63,7 +63,7 @@ Shaders: `spirv-cross private/wonder/spirv/<hash>.spv --version 450` shows the t
 | `NX_NO_PASS_BARRIER=1` | no barrier after render passes, as before DEBUG-2 #71 (bisecting) | nvn_draw.cpp |
 | `NX_STAGING_RING=1` | big texture uploads through the upload ring, as before DEBUG-2 #72 (bisecting) | nvn_upload.cpp |
 | `NX_PIPELINE_CACHE=0` | no on-disk pipeline cache (DEBUG-2 #73) | nvn_pipeline_cache.cpp |
-| `NX_PIPELINED=0..4` | Windows/Android: synchronous by default; 1..4 turns pipelined fences on (macOS default; DEBUG-2 #76) | nvn_frames.cpp |
+| `NX_PIPELINED=0..4` | Windows/Linux/Android: synchronous by default; 1..4 turns pipelined fences on (macOS default; DEBUG-2 #76) | nvn_frames.cpp |
 | `NX_CMD_REGION_OLD=1` | command memory keyed by the `NVNmemoryPool*` plus offset again, as before DEBUG-2 #90 (lists of one pool dropped by another's: exploded geometry); logs the first 5 such drops | nvn_cmd.cpp |
 | `NX_HANDLES_OLD=1` | the command-list safety net counts every list ever recorded again, as before DEBUG-2 #91 (live lists not called for ~2^18 recordings dropped: the world map lavender with black wedges after 3+ minutes in a course) | nvn_cmd.cpp |
 | `NX_KEEP_HANDLES=<n>` | the safety net's limit of live command lists (default 262144) | nvn_cmd.cpp |
